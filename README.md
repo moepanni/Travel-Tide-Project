@@ -14,11 +14,11 @@ Data Collection: Gathering customer data, including behavioral metrics and demog
 
 **Defining Perks:** Defining the most attractive perk for each customer based on their minimum rank in the indexes. And segment customers into groups based on their preferred perks using Python.
 
-**Demographic Analysis:** Analyzing customer segments by demographic characteristics such as age, gender, marital status, and parental status using Tableau
+**Demographic Analysis:** Analyzing customer segments by demographic characteristics such as age, gender, marital status, and parental status using Tableau.
 
 **Visualization:** Creating visualizations in Tableau to present the findings and insights from the analysis.
 
-**Conclusions and Recommendations:** Summarizing the project's goals, findings, and provide recommendations based on customer segmentation. Creating slides and video presentation in canves.com
+**Conclusions and Recommendations:** Summarizing the project's goals, findings, and provide recommendations based on customer segmentation. Creating slides and video presentation.
 ___
 ### Resources:
 
