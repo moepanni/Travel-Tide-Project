@@ -1,67 +1,179 @@
-WITH cohort_flight AS (SELECT s.user_id,
-                	      SUM(f.checked_bags)::FLOAT / COUNT(*) as average_bags, 
-                	      SUM(CASE WHEN s.flight_discount THEN 1 ELSE 0 END) :: FLOAT / COUNT(*) AS discount_flight_proportion, 
-                              ROUND(AVG(s.flight_discount_amount), 2) AS average_flight_discount,
-                              SUM(s.flight_discount_amount* f.base_fare_usd) / 
-       			      SUM(haversine_distance(geos.home_airport_lat, geos.home_airport_lon, f.destination_airport_lat, f.destination_airport_lon)) AS ADS
-		       FROM flights AS f INNER JOIN (SELECT DISTINCT home_airport, 
-                              				    home_airport_lat,
-                                                            home_airport_lon
-                              			    FROM users) AS geos ON f.origin_airport = geos.home_airport
-		      INNER JOIN sessions AS s ON f.trip_id = s.trip_id
-		      WHERE s.session_start > '2023-01-04' AND s.user_id in (SELECT DISTINCT user_id
-				 					     FROM sessions
-									     WHERE session_start > '2023-01-04'
-									     GROUP BY user_id
-									     HAVING COUNT(*)>7)
-                     AND s.cancellation = FALSE
-		     GROUP BY 1),                                                     
-flight_perk AS (SELECT  user_id,
-			(average_bags - MIN(average_bags) OVER()) / (MAX(average_bags) OVER() - MIN(average_bags) OVER()) AS average_bags_scaled,
-			discount_flight_proportion * average_flight_discount *
-      			((ADS - MIN(ADS) OVER()) / (MAX(ADS) OVER() - MIN(ADS) OVER())) AS bargain_hunter_index 
-		FROM cohort_flight), 
-cohort_hotels AS (SELECT s.user_id,
-                	 SUM(CASE WHEN s.hotel_discount THEN 1 ELSE 0 END) :: FLOAT / COUNT(*) AS discount_hotel_proportion, 
-                      	 ROUND(AVG(s.hotel_discount_amount), 2) AS average_hotel_discount,
-                      	 CASE WHEN SUM(h.nights) > 0 THEN (SUM(h.hotel_per_room_usd * h.rooms * s.hotel_discount_amount) /SUM(h.nights)) ELSE NULL END AS ADS_night
-       		  FROM hotels AS h 
-		  INNER JOIN sessions AS s ON h.trip_id = s.trip_id
-		  WHERE (s.session_start > '2023-01-04' AND s.user_id in (SELECT DISTINCT user_id
-									  FROM sessions
-									  WHERE session_start > '2023-01-04'
-									  GROUP BY user_id
-									  HAVING COUNT(*)>7))
-                  AND s.cancellation = FALSE
-		  GROUP BY 1), 
-hotel_perk AS (SELECT  user_id,
-		       discount_hotel_proportion * average_hotel_discount * 
-        	       (ADS_night - MIN(ADS_night) OVER()) / (MAX(ADS_night) OVER() - MIN(ADS_night) OVER()) AS hotel_hunter_index
-		FROM cohort_hotels), 
-cancellation_perk AS (SELECT user_id, 
-			     SUM(CASE WHEN cancellation is TRUE THEN 1 ELSE 0 END)::FLOAT /
-		   		SUM(CASE WHEN flight_booked IS TRUE OR hotel_booked IS TRUE THEN 1 ELSE 0 END) AS cancellation_rate,
-			     SUM(CASE WHEN flight_booked is TRUE AND hotel_booked IS TRUE THEN 1 ELSE 0 END)::FLOAT /
-		   		SUM(CASE WHEN flight_booked IS TRUE OR hotel_booked IS TRUE THEN 1 ELSE 0 END) AS combined_booking 
-                     FROM sessions
-		     WHERE session_start > '2023-01-04'
-		     GROUP BY 1
-		     HAVING COUNT(*)>7 AND COUNT(trip_id) > 0), 
-session_activity AS (SELECT user_id, 
-			    COUNT(session_id) AS session_number, 
-       			    AVG(DATE_PART('second', session_end - session_start)) AS average_session_sec
-		     FROM sessions
-		     WHERE session_start > '2023-01-04'
-		     GROUP BY 1
-		     HAVING COUNT(*)>7)                   
-SELECT COALESCE(fp.user_id, hp.user_id, cp.user_id) AS user_id,
-	hp.hotel_hunter_index,
-	fp.average_bags_scaled,   
-       (cp.cancellation_rate - MIN(cp.cancellation_rate) OVER()) / (MAX(cp.cancellation_rate) OVER() - MIN(cp.cancellation_rate) OVER()) AS cancellation_rate_scaled, 
-       fp.bargain_hunter_index, 
-       (cp.combined_booking - MIN(cp.combined_booking) OVER()) / (MAX(cp.combined_booking) OVER() - MIN(cp.combined_booking) OVER()) AS combined_booking_scaled, 
-       (sa.session_number / MAX(sa.session_number) OVER())::FLOAT * (sa.average_session_sec / MAX(sa.average_session_sec) OVER()) AS session_intencity_index
-FROM flight_perk AS fp FULL JOIN hotel_perk AS hp ON fp.user_id = hp.user_id
-FULL JOIN cancellation_perk AS cp ON cp.user_id = COALESCE(fp.user_id, hp.user_id)
-FULL JOIN session_activity AS sa ON sa.user_id = COALESCE(fp.user_id, hp.user_id, cp.user_id)
-;
+-- This CTE prelimits our sessions on Elena's suggested timeframe (After Jan 4 2023)
+WITH sessions_2023 AS (
+
+  SELECT *
+  FROM sessions s
+  WHERE s.session_start > '2023-01-04'
+
+),
+
+-- This CTE returns the ids of all users with more than 7 sessions in 2023
+filtered_users AS (
+
+  SELECT user_id,
+               COUNT(*)
+  FROM sessions_2023 s
+  GROUP BY user_id
+  HAVING COUNT(*) > 7
+
+),
+
+session_base AS (
+
+ SELECT
+          s.session_id,
+          s.user_id,
+          s.trip_id,
+          s.session_start,
+          s.session_end,
+          s.page_clicks,
+             s.flight_discount,
+          s.flight_discount_amount,
+          s.hotel_discount,
+          s.hotel_discount_amount,
+          s.flight_booked,
+          CASE
+              WHEN s.flight_booked = 'yes' THEN 1
+              ELSE 0
+          END AS flight_booked_int,
+          s.hotel_booked,
+          CASE
+              WHEN s.hotel_booked = 'yes' THEN 1
+              ELSE 0
+          END AS hotel_booked_int,
+          s.cancellation,
+          CASE
+              WHEN s.cancellation = 'yes' THEN 1
+              ELSE 0
+          END AS cancellation_int,
+             u.birthdate,
+          u.gender,
+          u.married,
+          u.has_children,
+          u.home_country,
+          u.home_city,
+          u.home_airport,
+          u.home_airport_lat,
+          u.home_airport_lon,
+          u.sign_up_date,
+             f.origin_airport,
+          f.destination,
+          f.destination_airport,
+          f.seats,
+          f.return_flight_booked,
+          f.departure_time,
+          f.return_time,
+          f.checked_bags,
+          f.trip_airline,
+          f.destination_airport_lat,
+          f.destination_airport_lon,
+          f.base_fare_usd,
+             h.hotel_name,
+          CASE
+              WHEN h.nights < 0 THEN 1
+              ELSE h.nights
+          END AS nights,
+          h.rooms,
+          h.check_in_time,
+          h.check_out_time,
+          h.hotel_per_room_usd AS hotel_price_per_room_night_usd
+
+  FROM sessions_2023 s
+
+  LEFT JOIN users u
+        ON s.user_id = u.user_id
+    LEFT JOIN flights f
+        ON s.trip_id = f.trip_id
+    LEFT JOIN hotels h
+        ON s.trip_id = h.trip_id
+
+  WHERE s.user_id IN (SELECT user_id FROM filtered_users)
+
+),
+
+
+-- This CTE returns the ids of all trips that have been canceled through a session
+-- We use this list to filter all canceled sessions in the next CTE
+
+canceled_trips AS (
+
+  SELECT DISTINCT trip_id
+  FROM session_base
+  WHERE cancellation = TRUE
+
+),
+
+-- This is our second base table to aggregate later
+-- It is derived from our session_base table, but we focus on valid trips
+
+-- All sessions without trips, all canceled trips have been removed
+-- Each row represents a trip that a user did
+not_canceled_trips AS(
+
+  SELECT *
+  FROM session_base
+    WHERE trip_id IS NOT NULL
+    AND trip_id NOT IN (SELECT trip_id FROM canceled_trips)
+
+),
+
+
+-- We want to aggregate user behaviour into metrics (a row per user)
+-- This CTE contains metrics that have to do with the browsing behaviour
+-- ALL SESSION within our cohort get aggregated
+
+user_base_session AS(
+
+        SELECT user_id,
+      SUM(page_clicks) AS num_clicks,
+      COUNT(DISTINCT session_id) AS num_sessions,
+      AVG(session_start - session_end) AS avg_session_duration
+FROM session_base
+GROUP BY user_id
+
+),
+
+-- We want to aggregate user behaviour into metrics (a row per user)
+-- This CTE contains metrics that have to do with the travel behavious
+-- Only rows with VALID trips within our cohort get aggregated
+
+    user_base_trip AS(
+
+    SELECT     user_id,
+                     COUNT(DISTINCT trip_id) AS num_trips,
+            SUM(CASE
+                  WHEN (flight_booked = TRUE) AND (return_flight_booked = TRUE) THEN 2
+                  WHEN flight_booked = TRUE THEN 1 ELSE 0
+                END) AS num_flights,
+            COALESCE((SUM((hotel_price_per_room_night_usd * nights * rooms) *
+                          (1 - (CASE
+                                  WHEN hotel_discount_amount IS NULL THEN 0
+                                  ELSE hotel_discount_amount
+                                END)))),0) AS money_spend_hotel,
+            AVG(EXTRACT(DAY FROM departure_time-session_end)) AS time_after_booking,
+            AVG(haversine_distance(home_airport_lat, home_airport_lon, destination_airport_lat, destination_airport_lon)) AS avg_km_flown
+
+    FROM not_canceled_trips
+        GROUP BY user_id
+)
+
+-- For our final user table, we join the session metric, trip metrics and general user information
+-- Using a left join, we will get a row for each user from our original cohort codition (7+ browsing sessions in 2023)
+-- If we used an inner join, we could get rid of users that have not actually travelled
+
+SELECT b.*,
+             EXTRACT(YEAR FROM AGE(u.birthdate)) AS age,
+       u.gender,
+       u.married,
+       u.has_children,
+       u.home_country,
+       u.home_city,
+       u.home_airport,
+             t.*
+
+FROM user_base_session b
+    LEFT JOIN users u
+        ON b.user_id = u.user_id
+    LEFT JOIN user_base_trip t
+        ON b.user_id = t.user_id
+
