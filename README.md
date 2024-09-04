@@ -2,7 +2,7 @@
 ___
 
 ### Project Description:
-Welcome to the TravelTide Customer Segmentation and Rewards Program repository! This project is designed to support TravelTide's marketing team in developing a personalized rewards program by employing customer segmentation strategies. By recognizing unique customer segments, TravelTide can customize rewards and benefits to align with individual preferences and behaviors, boosting customer engagement and loyalty.
+This project aims to analyze customer behavior and preferences to define the most attractive reward or perk for each customer group. It involves processing customer data, calculating various indexes, segmenting customers, and determining suitable perks for each segment. The project also explores customer demographics to tailor the perks accordingly.
 ___
 
 ### Main Steps:
